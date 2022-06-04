@@ -15,14 +15,15 @@ def coin_toss_test(data):
     prior = {"p_of_heads": tfd.Beta(2, 3)}
     bijectors = {"p_of_heads": tfb.Sigmoid()}
     likelihood = tfd.Bernoulli
-    get_likelihood_params = lambda params: {"probs": params["p_of_heads"]}
+    get_likelihood_params = lambda params, aux: {"probs": params["p_of_heads"]}
 
     laplace = ADLaplace(prior, bijectors, likelihood, get_likelihood_params)
 
     init_seed = jax.random.PRNGKey(0)
     params = laplace.init(init_seed)
     loss = laplace.loss_fun(params, data)
-    precision = laplace.apply(params, data)
+    posterior = laplace.apply(params, data)
+    sample = posterior.sample(seed=jax.random.PRNGKey(0))
 
     pass
 
