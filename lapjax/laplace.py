@@ -29,7 +29,7 @@ class ADLaplace:
 
         self.likelihood = likelihood
         self.get_likelihood_params = get_likelihood_params
-        self.transformed_distributions = jax.tree_map(
+        self.normal_distributions = jax.tree_map(
             lambda _, bijector, dist: tfd.TransformedDistribution(dist, tfb.Invert(bijector)),
             self.guide,
             self.bijectors,
@@ -41,7 +41,7 @@ class ADLaplace:
         params = jax.tree_map(
             lambda seed, dist: dist.sample(seed=seed),
             seeds,
-            self.transformed_distributions,
+            self.normal_distributions,
         )
         for param in params.values():
             assert param.ndim <= 1, "params must be scalar or vector"
@@ -52,7 +52,7 @@ class ADLaplace:
         prior_log_probs = jax.tree_map(
             lambda param, dist: dist.log_prob(param),
             params,
-            self.transformed_distributions,
+            self.normal_distributions,
         )
 
         def likelihood_log_prob(params, data, aux):
@@ -65,7 +65,6 @@ class ADLaplace:
         return loss
 
     def apply(self, params, data, aux=None):
-        params = jax.tree_map(jnp.atleast_1d, params)
         precision = jax.hessian(self.loss_fun)(params, data, aux)
         return Posterior(params, precision, self.bijectors)
 
@@ -77,16 +76,15 @@ class Posterior:
         self.precision = jax.tree_map(lambda x: x, precision)
         self.bijectors = jax.tree_map(lambda x: x, bijectors)
         
-        size = jax.tree_map(lambda param: param.size, self.params)
-        self.cumsum_size = np.cumsum(jax.tree_leaves(size))[:-1]
+        self.size = jax.tree_map(lambda param: param.size, self.params)
+        self.cumsum_size = np.cumsum(jax.tree_leaves(self.size))[:-1]
 
     def untree_precision(self):
         covariance_matrix = []
         for start in self.precision:
             covariance_matrix.append([])
             for end in self.precision[start]:
-                element = self.precision[start][end]
-                assert element.ndim == 2
+                element = self.precision[start][end].reshape((self.size[start], self.size[end]))
                 covariance_matrix[-1].append(element)
         return jnp.block(covariance_matrix)
 

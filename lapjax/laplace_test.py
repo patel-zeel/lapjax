@@ -1,9 +1,7 @@
-from distrax import Bijector
 import pytest
 
 import jax
 import jax.numpy as jnp
-from sklearn import mixture
 import tensorflow_probability.substrates.jax as tfp
 
 tfd = tfp.distributions
@@ -183,3 +181,25 @@ def optimize_test(problem):
         updates, state = tx.update(grads, state)
         params = optax.apply_updates(params, updates)
     assert losses[-1] < losses[0]
+
+
+## Test precision computation
+@pytest.mark.parametrize("problem", problems)
+def precision_test(problem):
+    prior, bijectors, likelihood, get_likelihood_params, data, aux = problem()
+    laplace = ADLaplace(prior, bijectors, likelihood, get_likelihood_params)
+    params = laplace.init(jax.random.PRNGKey(0))
+    posterior = laplace.apply(params, data, aux)
+    precision_matrix = posterior.untree_precision()
+    pass
+
+
+## Test posterior samples
+@pytest.mark.parametrize("problem", problems)
+def posterior_sample_test(problem):
+    prior, bijectors, likelihood, get_likelihood_params, data, aux = problem()
+    laplace = ADLaplace(prior, bijectors, likelihood, get_likelihood_params)
+    params = laplace.init(jax.random.PRNGKey(2))
+    posterior = laplace.apply(params, data, aux)
+    sample = posterior.sample(jax.random.PRNGKey(1))
+    pass
