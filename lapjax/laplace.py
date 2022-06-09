@@ -22,7 +22,7 @@ from .utils import seeds_like
 
 
 class ADLaplace:
-    def __init__(self, prior, bijectors, likelihood, get_likelihood_params):
+    def __init__(self, prior, bijectors, likelihood=None, get_likelihood_params=None):
         self.prior = prior
         self.guide = {key: 0 for key in self.prior}
         self.bijectors = bijectors
@@ -62,21 +62,23 @@ class ADLaplace:
 
         likelihood_log_probs = jax.vmap(likelihood_log_prob, in_axes=(None, 0, 0))(transformed_params, data, aux)
         loss = -likelihood_log_probs.sum() - sum(jax.tree_leaves(prior_log_probs))
-        return loss / len(data)
+        return loss
 
     def apply(self, params, data, aux=None):
+        params = jax.tree_map(jnp.atleast_1d, params)
         precision = jax.hessian(self.loss_fun)(params, data, aux)
         return Posterior(params, precision, self.bijectors)
 
 
 class Posterior:
     def __init__(self, params, precision, bijectors):
-        self.params = jax.tree_map(lambda x: x, params)
+        self.params = jax.tree_map(jnp.atleast_1d, params)
         self.guide = jax.tree_structure(self.params)
         self.precision = jax.tree_map(lambda x: x, precision)
         self.bijectors = jax.tree_map(lambda x: x, bijectors)
-        self.size = jax.tree_map(lambda param: param.size, self.params)
-        self.cumsum_size = np.cumsum(jax.tree_leaves(self.size))[:-1]
+        
+        size = jax.tree_map(lambda param: param.size, self.params)
+        self.cumsum_size = np.cumsum(jax.tree_leaves(size))[:-1]
 
     def untree_precision(self):
         covariance_matrix = []
@@ -84,9 +86,7 @@ class Posterior:
             covariance_matrix.append([])
             for end in self.precision[start]:
                 element = self.precision[start][end]
-                element = jnp.atleast_2d(element)
-                if start > end:
-                    element = element.T
+                assert element.ndim == 2
                 covariance_matrix[-1].append(element)
         return jnp.block(covariance_matrix)
 
@@ -100,12 +100,23 @@ class Posterior:
     def sample(self, seed, sample_shape=()):
         dist = self.get_normal_dist()
         normal_sample = dist.sample(sample_shape=sample_shape, seed=seed)
-        split_sample = jax.tree_unflatten(self.guide, jnp.split(normal_sample, self.cumsum_size, axis=-1))
+        split_sample = jnp.split(normal_sample, self.cumsum_size, axis=-1)
+        split_sample = jax.tree_unflatten(self.guide, split_sample)
         return jax.tree_map(lambda sample, bijector: bijector.forward(sample), split_sample, self.bijectors)
 
-
-    # TODO: implement log_prob
-    # def log_prob(self, sample):
-    #     sample = jax.tree_map(lambda x: x, sample)
-    #     dist = self.get_normal_dist()
+    def log_prob(self, sample):
+        posterior_sample = jax.tree_map(jnp.atleast_1d, sample)
+        normal_sample = jax.tree_map(lambda sample, bijector: bijector.inverse(sample), posterior_sample, self.bijectors)
+        log_jacobian = jax.tree_map(lambda sample, bijector: jnp.atleast_1d(bijector.inverse_log_det_jacobian(sample)), posterior_sample, self.bijectors)
+        log_jacobian = jnp.squeeze(jax.vmap(lambda x: sum(jax.tree_leaves(x)))(log_jacobian))
+        flat_sample = jnp.concatenate(jax.tree_map(jnp.atleast_1d, jax.tree_leaves(normal_sample)))
+        dist = self.get_normal_dist()
+        normal_log_prob = jnp.squeeze(jnp.atleast_1d(dist.log_prob(flat_sample)))
+        assert normal_log_prob.shape == log_jacobian.shape
+        return normal_log_prob + log_jacobian
+    
+    def sample_and_log_prob(self, seed, sample_shape=()):
+        samples = self.sample(seed, sample_shape)
+        return samples, self.log_prob(samples)
+        
         
