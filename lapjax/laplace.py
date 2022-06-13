@@ -22,13 +22,12 @@ from .utils import seeds_like
 
 
 class ADLaplace:
-    def __init__(self, prior, bijectors, likelihood=None, get_likelihood_params=None):
+    def __init__(self, prior, bijectors, get_likelihood=None):
         self.prior = prior
         self.guide = {key: 0 for key in self.prior}
         self.bijectors = bijectors
 
-        self.likelihood = likelihood
-        self.get_likelihood_params = get_likelihood_params
+        self.get_likelihood = get_likelihood
         self.normal_distributions = jax.tree_map(
             lambda _, bijector, dist: tfd.TransformedDistribution(dist, tfb.Invert(bijector)),
             self.guide,
@@ -56,12 +55,11 @@ class ADLaplace:
         )
 
         def likelihood_log_prob(params, data, aux):
-            likelihood_params = self.get_likelihood_params(params, aux)
-            likelihood = self.likelihood(**likelihood_params)
+            likelihood = self.get_likelihood(params, aux)
             return likelihood.log_prob(data)
 
         likelihood_log_probs = jax.vmap(likelihood_log_prob, in_axes=(None, 0, 0))(transformed_params, data, aux)
-        loss = -likelihood_log_probs.sum() - sum(jax.tree_leaves(prior_log_probs))
+        loss = -(likelihood_log_probs.sum() + sum(jax.tree_leaves(prior_log_probs)))
         return loss
 
     def apply(self, params, data, aux=None):
@@ -80,13 +78,13 @@ class Posterior:
         self.cumsum_size = np.cumsum(jax.tree_leaves(self.size))[:-1]
 
     def untree_precision(self):
-        covariance_matrix = []
+        precision_matrix = []
         for start in self.precision:
-            covariance_matrix.append([])
+            precision_matrix.append([])
             for end in self.precision[start]:
                 element = self.precision[start][end].reshape((self.size[start], self.size[end]))
-                covariance_matrix[-1].append(element)
-        return jnp.block(covariance_matrix)
+                precision_matrix[-1].append(element)
+        return jnp.block(precision_matrix)
 
     def get_normal_dist(self):
         precision_matrix = self.untree_precision()

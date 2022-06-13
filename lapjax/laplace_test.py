@@ -3,6 +3,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 import tensorflow_probability.substrates.jax as tfp
+from sklearn.datasets import make_regression
 
 tfd = tfp.distributions
 tfb = tfp.bijectors
@@ -10,6 +11,7 @@ tfb = tfp.bijectors
 from lapjax import ADLaplace
 
 import optax
+import matplotlib.pyplot as plt
 
 ## Problems
 def get_coin_toss():
@@ -47,8 +49,28 @@ def get_mean_and_cov_estimate():
     return prior, bijectors, likelihood, get_likelihood_params, data, aux
 
 
-def get_lin_reg():
-    prior = {"theta": tfd.MultivariateNormalDiag(loc=[0.0, 1.0], scale_diag=[1.0, 2.0]), "sigma": tfd.Gamma(1, 1)}
+def get_lin_reg1():
+    D = 2
+    prior = {"theta": tfd.MultivariateNormalDiag(loc=jnp.zeros(D), scale_diag=10 * jnp.ones(D))}
+    bijectors = {"theta": tfb.Identity()}
+    likelihood = tfd.Normal
+
+    def get_likelihood_params(params, aux):
+        mean = jnp.sum(aux["x"] * params["theta"])
+        return {"loc": mean, "scale": 0.1}
+
+    X, y = make_regression(n_samples=10, n_features=D)
+    y = (y - y.mean()) / y.std()
+    aux = {"x": X}
+    data = y
+    plt.scatter(aux["x"][:, 0], data)
+    plt.scatter(aux["x"][:, 1], data)
+    plt.savefig("lin_reg1.png")
+    return prior, bijectors, likelihood, get_likelihood_params, data, aux
+
+
+def get_lin_reg2():
+    prior = {"theta": tfd.MultivariateNormalDiag(loc=[0.0, 0.0], scale_diag=[1.0, 2.0]), "sigma": tfd.Gamma(2, 2)}
     bijectors = {"theta": tfb.Identity(), "sigma": tfb.Exp()}
     likelihood = tfd.Normal
 
@@ -57,8 +79,8 @@ def get_lin_reg():
         scale = params["sigma"]
         return {"loc": mean, "scale": scale}
 
-    aux = {"x": jax.random.uniform(jax.random.PRNGKey(0), shape=(100, 2))}
-    data = jax.random.uniform(jax.random.PRNGKey(1), shape=(100,))
+    aux = {"x": 10 * jax.random.uniform(jax.random.PRNGKey(0), shape=(10, 2))}
+    data = 1 * aux["x"][:, 0] + 2 * aux["x"][:, 1] + 0.1 * jax.random.normal(jax.random.PRNGKey(1), shape=(10,))
     return prior, bijectors, likelihood, get_likelihood_params, data, aux
 
 
@@ -127,7 +149,7 @@ def get_gmm_2d():
     return prior, bijectors, likelihood, get_likelihood_params, data, aux
 
 
-problems = [get_coin_toss, get_mean_and_cov_estimate, get_lin_reg, get_gmm_1d, get_gmm_2d]
+problems = [get_coin_toss, get_mean_and_cov_estimate, get_lin_reg1, get_lin_reg2, get_gmm_1d, get_gmm_2d]
 
 ## Useful functions
 def get_init_params(prior, bijectors):
@@ -142,6 +164,10 @@ def get_loss(prior, bijectors, likelihood, get_likelihood_params, data, aux):
     params = laplace.init(jax.random.PRNGKey(0))
     loss = laplace.loss_fun(params, data, aux)
     return loss
+
+
+def get_lin_reg_closed_form(prior, likelihood, get_likelihood_params, data, aux):
+    pass
 
 
 ## Test parameter initialization
@@ -199,7 +225,23 @@ def precision_test(problem):
 def posterior_sample_test(problem):
     prior, bijectors, likelihood, get_likelihood_params, data, aux = problem()
     laplace = ADLaplace(prior, bijectors, likelihood, get_likelihood_params)
-    params = laplace.init(jax.random.PRNGKey(2))
+    value_and_grad_fun = jax.jit(jax.value_and_grad(laplace.loss_fun))
+
+    tx = optax.adam(learning_rate=0.1)
+
+    params = laplace.init(jax.random.PRNGKey(0))
+    state = tx.init(params)
+
+    epochs = 200
+
+    losses = []
+
+    for _ in range(epochs):
+        loss, grads = value_and_grad_fun(params, data, aux)
+        losses.append(loss)
+        updates, state = tx.update(grads, state)
+        params = optax.apply_updates(params, updates)
+
     posterior = laplace.apply(params, data, aux)
     sample = posterior.sample(jax.random.PRNGKey(1))
     pass
