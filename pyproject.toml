@@ -9,7 +9,7 @@ requires = [
 	]
 
 [tool.setuptools_scm]
-write_to = "lapjax/_version.py"
+write_to = "laplax/_version.py"
 
 [tool.black]
 line-length = 120

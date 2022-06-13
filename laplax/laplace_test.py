@@ -8,7 +8,7 @@ from sklearn.datasets import make_regression
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
-from lapjax import ADLaplace
+from laplax import ADLaplace
 
 import optax
 import matplotlib.pyplot as plt
